@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+.env
+/data/
+*.ckpt
+*.pt
+runs/
+.ipynb_checkpoints/
+.DS_Store

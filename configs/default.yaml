@@ -1,0 +1,9 @@
+data:
+  processed_root: ../arvyo-data/data/processed
+  kepler_root: ../arvyo-data/data/kepler/processed
+  augmented_root: ../arvyo-data/data/augmented
+  schema_version: "1.0"
+labels: [planet, eb, blend, starspot, null_, unknown]   # note: null is reserved in yaml
+model:
+  global_bins: 201
+  local_bins: 81

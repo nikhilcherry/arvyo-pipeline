@@ -7,3 +7,12 @@ labels: [planet, eb, blend, starspot, null_, unknown]   # note: null is reserved
 model:
   global_bins: 201
   local_bins: 81
+
+# arvyo/worker.py glue-layer settings: foldr -> fitr per-target pipeline.
+# sde_min/snr_min gate foldr's candidate period (pass if EITHER is met).
+pipeline:
+  sde_min: 7.0
+  snr_min: 7.0
+  foldr_timeout_s: 300
+  fitr_timeout_s: 600
+  results_dir: results

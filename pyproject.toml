@@ -3,10 +3,42 @@ name = "arvyo"
 version = "0.1.0"
 description = "Arvyo exoplanet transit-detection model/analysis pipeline"
 requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "pyyaml",
+    "torch",
+    "lightkurve>=2.4",
+    "wotan",
+    "transitleastsquares",
+    "batman-package",
+    "sbi",
+    "emcee",
+    "exovetter",
+    "triceratops",
+    "streamlit",
+    "pytest",
+]
+
+[project.optional-dependencies]
+pipeline = [
+    "foldr @ git+https://github.com/nikhilcherry/foldr",
+    "fitr @ git+https://github.com/nikhilcherry/fitr",
+    "batchr @ git+https://github.com/nikhilcherry/batchr",
+    "trackr @ git+https://github.com/nikhilcherry/trackr",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["arvyo*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end glue-layer tests that shell out to foldr/fitr/batchr (see tests/test_end_to_end.py)",
+]

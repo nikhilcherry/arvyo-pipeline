@@ -61,3 +61,23 @@ def test_end_to_end_smoke(tmp_path):
     out_path = tmp_path / "fit.png"
     plot_fit(time, flux, model_flux, period, t0, save_path=out_path)
     assert out_path.exists()
+
+
+def test_fit_emcee_return_chain():
+    period, t0, rp = 1.8, 0.3, 0.12
+    params = {"period": period, "rp": rp, "t0": t0, "a": 10.0, "inc": 88.0}
+    time = np.arange(0, 5, 2.0 / 60 / 24)
+    flux_err = np.full(time.size, 0.0005)
+    rng = np.random.default_rng(0)
+    flux = planet(params, time) + rng.normal(0, 0.0002, time.size)
+
+    posteriors = fit_emcee(
+        time, flux, flux_err, t0=t0, period_init=period,
+        duration_init=0.1, depth_init=0.01,
+        nwalkers=16, nsteps=50, return_chain=True,
+    )
+    assert "chain" in posteriors
+    for key in ("period", "duration", "depth"):
+        chain = posteriors["chain"][key]
+        assert chain.ndim == 1 and chain.size > 0
+        assert np.all(np.isfinite(chain))

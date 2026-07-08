@@ -72,6 +72,92 @@ pytest                                                    # run tests
 streamlit run app/dashboard.py                            # explore a sample
 ```
 
+## How the pipeline works (visual walkthrough)
+
+These figures are generated straight from a real `planet`-labeled sample
+(`arvyo-data/data/processed/planet/75650448.npz`, TIC 75650448, 776 points,
+one TESS sector split across two orbits) run through every stage of the
+direct-module spine below — `scripts/smoke_run.py`, not the glue layer.
+Figure 8 pulls in whatever other classes happen to be available locally.
+Nothing here is cherry-picked or hand-edited; regenerate them yourself with
+the command at the bottom of this section, and diff against what's
+committed in `docs/figures/`.
+
+**1. Raw light curve** — the input: two visits, each with one visible dip.
+
+![raw light curve](docs/figures/01_raw_lightcurve.png)
+
+**2. Global/local views** — `arvyo/views/views.py`'s 201-bin global / 81-bin
+local phase-folded views, the model's actual input representation.
+
+![views](docs/figures/02_views.png)
+
+**3. TLS periodogram** — the strongest peak is at 9.09 days (SDE 20.1), but
+this sample's own metadata says the injected period is 18.18 days — almost
+exactly double. TLS itself flags this: *"1 of 3 transits without data. The
+true period may be twice the given period."* This is a real period-aliasing
+case, not a fixed one — the smoke run reports both periods and their
+relative difference (≈0.50) rather than silently accepting whichever TLS
+returns.
+
+![TLS periodogram](docs/figures/03_tls_periodogram.png)
+
+**4. Phase-folded + binned curve** — the data folded at TLS's (aliased)
+9.09-day period, with the binned global view overlaid.
+
+![phase fold](docs/figures/04_phase_fold.png)
+
+**5. Four competing hypotheses** — planet / EB / blend / starspot all fit to
+the same data. **`best_explanation` picks `blend` here, not `planet`** (chi²
+777.5 vs. 794.4 — a 2% difference), even though the sample is labeled
+`planet`. This is the same planet/blend degeneracy already documented in
+`tests/test_end_to_end.py`: blend's free `dilution` parameter can absorb a
+small residual (here, plausibly worsened by folding at the aliased half
+period) and edge out the true model on chi² alone. It happened on all four
+locally-available samples in this smoke set (`eb`, `starspot`, and `null`
+also rank `blend` first) — this is a known, pre-existing limitation of
+chi²-only ranking, not something this smoke-testing session fixed or hid.
+
+![four hypotheses](docs/figures/05_four_hypotheses.png)
+
+**6. emcee posteriors** — period/duration/depth marginals from `fit_emcee`,
+seeded at TLS's (aliased) period; the posterior is tight because the fit
+converges cleanly, not because the period is correct.
+
+![posteriors](docs/figures/06_posteriors.png)
+
+**7. Vetting** — odd/even and secondary-eclipse checks at the TLS ephemeris.
+For this sample the odd-transit depth comes back `NaN`: with only ~2 orbits
+of data folded at the aliased 9.09-day period, one of the three expected
+odd-cycle transits falls in the same data gap TLS already warned about, so
+`arvyo/vetting/vet.py` has no in-transit points to measure there. This is
+reported as `null` in the JSON (see the NaN-sanitizing note below), not
+papered over with a fabricated number.
+
+![vetting](docs/figures/07_vetting.png)
+
+**8. Class gallery** — phase-folded curves for every class with a local
+sample. `blend` has zero samples under `arvyo-data/data/processed/` at the
+time these figures were generated, so it's captioned as missing rather than
+faked.
+
+![class gallery](docs/figures/08_class_gallery.png)
+
+### Smoke run
+
+Run the whole spine over one sample per class and get a figure + JSON
+report per sample in `smoke_out/` (gitignored — regenerate, don't commit):
+
+```bash
+python scripts/smoke_run.py --data-root ../arvyo-data/data/processed --seed 42
+```
+
+Exit code is `0` if every attempted stage on every sample passed, `1` if any
+stage failed, `2` if no samples were found. Pass `--fast` to halve the
+emcee/sbi settings for a quicker (still real, just noisier) run. Regenerate
+the 8 figures above with `--make-docs-figures` (uses the same `--seed`/
+`--fast` flags, and only needs a local `planet` sample).
+
 ## Glue layer: foldr -> fitr -> batchr
 
 `arvyo/worker.py`, `arvyo/batch_worker.py`, and `arvyo/run.py` are pure

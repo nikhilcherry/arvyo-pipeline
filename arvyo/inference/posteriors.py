@@ -17,10 +17,13 @@ def _box_transit(time, t0, period, duration, depth):
 
 
 def fit_emcee(time, flux, flux_err, t0, period_init, duration_init, depth_init,
-              nwalkers=32, nsteps=200, burn=50, seed=0):
+              nwalkers=32, nsteps=200, burn=50, seed=0, return_chain=False):
     """Tiny emcee fit of period+duration+depth on a box-transit planet model.
 
     Returns {"period": {p16,p50,p84}, "duration": {...}, "depth": {...}}.
+    If `return_chain` is True, also includes a "chain" key with the flat
+    post-burn-in samples per parameter (for posterior plots) — off by
+    default so the normal summary-only return stays unchanged.
     """
     import emcee
 
@@ -58,10 +61,13 @@ def fit_emcee(time, flux, flux_err, t0, period_init, duration_init, depth_init,
     pcts = np.percentile(chain, [16, 50, 84], axis=0)
 
     names = ["period", "duration", "depth"]
-    return {
+    result = {
         name: {"p16": float(pcts[0, i]), "p50": float(pcts[1, i]), "p84": float(pcts[2, i])}
         for i, name in enumerate(names)
     }
+    if return_chain:
+        result["chain"] = {name: chain[:, i] for i, name in enumerate(names)}
+    return result
 
 
 def fit_sbi(time, observed_flux, period_bounds=(0.5, 10.0), rp_bounds=(0.01, 0.3),

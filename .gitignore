@@ -8,3 +8,4 @@ venv/
 runs/
 .ipynb_checkpoints/
 .DS_Store
+/smoke_out/

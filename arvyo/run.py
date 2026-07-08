@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _cmd_one(args: argparse.Namespace) -> int:
     config = PipelineConfig.load(args.config) if args.config else PipelineConfig.load()
-    result = process_target(args.path, config)
+    result = process_target(args.path, config, use_catalog_period=args.use_catalog_period)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -206,6 +206,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_one = sub.add_parser("one", help="Run the pipeline on a single .npz target")
     p_one.add_argument("path")
     p_one.add_argument("--config", default=None, help="path to a pipeline config yaml")
+    p_one.add_argument(
+        "--use-catalog-period", action="store_true",
+        help=(
+            "Skip foldr's period search and fold at the .npz's own "
+            "period_days/epoch_btjd metadata instead. Useful for demoing "
+            "fitr on targets with a known ephemeris."
+        ),
+    )
     p_one.set_defaults(func=_cmd_one)
 
     p_all = sub.add_parser("all", help="Run the pipeline over a manifest CSV via batchr")

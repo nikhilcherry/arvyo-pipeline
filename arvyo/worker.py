@@ -84,13 +84,25 @@ def _failure_message(returncode, stderr, tool_error, tool_name) -> str:
     return f"{tool_name} exited {returncode} with no parseable JSON on stdout"
 
 
-def process_target(npz_path: str | Path, config: PipelineConfig | None = None) -> dict:
+def process_target(
+    npz_path: str | Path,
+    config: PipelineConfig | None = None,
+    use_catalog_period: bool = False,
+) -> dict:
     """Run foldr then fitr on one .npz target; always returns a result dict.
 
     Never raises for tool-level failures (bad file, foldr/fitr crash or
     timeout, a non-clear fitr verdict) — every input produces exactly one
     schema-valid result dict. Only programmer errors (a bad `config` type)
     raise.
+
+    `use_catalog_period=True` skips foldr's period search entirely and
+    folds at the `period_days`/`epoch_btjd` already present in the .npz
+    metadata instead — useful for demoing fitr on targets with a known
+    ephemeris, and for sidestepping foldr's inherent search-resolution
+    phase error (a real, small period/epoch mismatch that a rigid
+    `t0_shift` can't fully absorb and that model-comparison can pick up
+    on; catalog values don't have this error).
     """
     if config is not None and not isinstance(config, PipelineConfig):
         raise TypeError(f"config must be a PipelineConfig or None, got {type(config)!r}")
@@ -129,49 +141,78 @@ def process_target(npz_path: str | Path, config: PipelineConfig | None = None) -
         "sector": sample.get("sector"),
     }
 
-    # --- step 2: foldr period search --------------------------------------
-    returncode, payload, stderr, duration, tool_error = _invoke_tool(
-        "foldr", [str(npz_path), "--json", "--no-plot"], config.foldr_timeout_s
-    )
-    runtime_s["foldr"] = duration
-
-    if payload is None:
-        return _finish(
-            input=input_meta,
-            period_search=None,
-            model_fit=None,
-            verdict="no_period",
-            winner=None,
-            error={
-                "stage": "period_search",
-                "message": _failure_message(returncode, stderr, tool_error, "foldr"),
-            },
+    # --- step 2: period source: catalog ephemeris, or foldr's search -----
+    if use_catalog_period:
+        period_days = sample.get("period_days")
+        epoch_btjd = sample.get("epoch_btjd")
+        if period_days is None or epoch_btjd is None:
+            return _finish(
+                input=input_meta,
+                period_search=None,
+                model_fit=None,
+                verdict="error",
+                winner=None,
+                error={
+                    "stage": "period_search",
+                    "message": (
+                        "use_catalog_period=True but period_days/epoch_btjd "
+                        "are missing from the .npz metadata"
+                    ),
+                },
+            )
+        period_search = {
+            "engine": "catalog",
+            "period": period_days,
+            "t0": epoch_btjd,
+            "duration_hours": None,
+            "depth_ppm": None,
+            "snr": None,
+            "sde": None,
+            "passed_gate": True,
+        }
+    else:
+        returncode, payload, stderr, duration, tool_error = _invoke_tool(
+            "foldr", [str(npz_path), "--json", "--no-plot"], config.foldr_timeout_s
         )
+        runtime_s["foldr"] = duration
 
-    sde = payload.get("sde")
-    snr = payload.get("snr")
-    passed_gate = _passed_gate(sde, snr, config)
-    period_search = {
-        "engine": payload.get("engine"),
-        "period": payload.get("period_days"),
-        "t0": payload.get("t0"),
-        "duration_hours": payload.get("duration_hours"),
-        "depth_ppm": payload.get("depth_ppm"),
-        "snr": snr,
-        "sde": sde,
-        "passed_gate": passed_gate,
-    }
+        if payload is None:
+            return _finish(
+                input=input_meta,
+                period_search=None,
+                model_fit=None,
+                verdict="no_period",
+                winner=None,
+                error={
+                    "stage": "period_search",
+                    "message": _failure_message(returncode, stderr, tool_error, "foldr"),
+                },
+            )
 
-    # --- step 3: gate the period; short-circuit if it's not trustworthy --
-    if not passed_gate:
-        return _finish(
-            input=input_meta,
-            period_search=period_search,
-            model_fit=None,
-            verdict="no_period",
-            winner=None,
-            error=None,
-        )
+        sde = payload.get("sde")
+        snr = payload.get("snr")
+        passed_gate = _passed_gate(sde, snr, config)
+        period_search = {
+            "engine": payload.get("engine"),
+            "period": payload.get("period_days"),
+            "t0": payload.get("t0"),
+            "duration_hours": payload.get("duration_hours"),
+            "depth_ppm": payload.get("depth_ppm"),
+            "snr": snr,
+            "sde": sde,
+            "passed_gate": passed_gate,
+        }
+
+        # --- step 3: gate the period; short-circuit if not trustworthy ---
+        if not passed_gate:
+            return _finish(
+                input=input_meta,
+                period_search=period_search,
+                model_fit=None,
+                verdict="no_period",
+                winner=None,
+                error=None,
+            )
 
     # --- step 4: fitr's 4-model fit at foldr's candidate period -----------
     returncode, payload, stderr, duration, tool_error = _invoke_tool(

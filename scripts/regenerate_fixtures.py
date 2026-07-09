@@ -6,11 +6,11 @@ blind BLS/TLS period search to recover their injected periods, and their
 period_days/epoch_btjd catalog fields weren't even in the same time frame as
 the `time` array (epoch_btjd=1000.0 against a time array starting at 0) — so
 tests/test_end_to_end.py had to carry a whole "these fixtures can't actually
-be searched" caveat. This script fixes both: a ~27-day baseline (one TESS
-sector) at 10-minute cadence gives a 3.14-day planet period 8+ transits
-(comfortably >7 SDE/SNR through foldr's real search), and epoch_btjd is now
-set in the *same frame* as `time` so `--use-catalog-period` (arvyo/run.py)
-folds correctly too.
+be searched" caveat. This script fixes both: a 27.4-day baseline (one TESS
+sector) at 30-minute cadence (~1315 points) gives the 3.14-day planet period
+8 full transits — comfortably recoverable (>7 SDE) through foldr's real
+search — and epoch_btjd is now set in the *same frame* as `time` so
+`--use-catalog-period` (arvyo/run.py) folds correctly too.
 
 Load-bearing detail: fitr's PlanetModel/BlendModel fit with FIXED
 limb-darkening coefficients u=[0.4, 0.25] (fitr/models/planet.py) — they are
@@ -25,11 +25,19 @@ verified empirically). Passing u=[0.4, 0.25] to eliminate that systematic
 mismatch is what makes `winner == "planet"` a reliable outcome instead of a
 coin flip against the model's own degenerate blend alternative.
 
-Run: python scripts/generate_fixtures.py
+`fixture_unknown.npz` is deliberately ambiguous by construction, not by
+omission: it's broadband white noise louder than `null` with no injected
+periodic signal at all, so it has no "correct" period to recover. It exists
+to exercise the pipeline's low-confidence/novelty path (a real target that
+looks like nothing in particular), not to be a harder version of `planet`
+or `eb`.
+
+Run: python scripts/regenerate_fixtures.py [--seed 42]
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -42,23 +50,44 @@ from arvyo.synthesis.forward_models import eclipsing_binary, planet, starspot as
 
 FIXTURES_DIR = ROOT / "tests" / "fixtures"
 
-CADENCE_DAYS = 10.0 / 60 / 24   # 10-minute TESS FFI-like cadence
-BASELINE_DAYS = 27.0            # ~one TESS sector
+CADENCE_DAYS = 30.0 / 60 / 24   # 30-minute TESS FFI cadence
+BASELINE_DAYS = 27.4            # one TESS sector
 
 # Matches fitr/models/planet.py's fixed LD_COEFFS exactly (see module
 # docstring) so injected planet/eb transits don't create a spurious
 # planet/blend systematic mismatch.
 FITR_LD_COEFFS = [0.4, 0.25]
 
-
-def _time_grid(seed_jitter: float = 0.0) -> np.ndarray:
-    return np.arange(0.0, BASELINE_DAYS, CADENCE_DAYS) + seed_jitter
+FIXTURE_NAMES = ["planet", "eb", "starspot", "null", "unknown"]
 
 
-def make_planet_fixture() -> dict:
+def _time_grid() -> np.ndarray:
+    return np.arange(0.0, BASELINE_DAYS, CADENCE_DAYS)
+
+
+def _rngs(seed: int) -> dict[str, np.random.Generator]:
+    """Independent, reproducible RNG streams for each fixture, all derived
+    from one master --seed (default 42) so the whole regeneration run is
+    reproducible from a single number without the streams overlapping."""
+    children = np.random.SeedSequence(seed).spawn(len(FIXTURE_NAMES))
+    return {name: np.random.default_rng(child) for name, child in zip(FIXTURE_NAMES, children)}
+
+
+def _red_noise(rng: np.random.Generator, n: int, *, sigma: float, phi: float = 0.98) -> np.ndarray:
+    """Mild AR(1) red noise: correlated, slowly-wandering, but stationary
+    (no drift/trend) — distinct from a designed periodic signal, so it must
+    not trip a period search."""
+    innovations = rng.normal(0.0, sigma, n)
+    red = np.empty(n)
+    red[0] = innovations[0]
+    for i in range(1, n):
+        red[i] = phi * red[i - 1] + innovations[i]
+    return red
+
+
+def make_planet_fixture(rng: np.random.Generator) -> dict:
     period, t0, rp = 3.14, 1.5, 0.10
     time = _time_grid()
-    rng = np.random.default_rng(300494)
 
     params = {
         "period": period, "rp": rp, "t0": t0, "a": 20.0, "inc": 89.0,
@@ -75,10 +104,9 @@ def make_planet_fixture() -> dict:
     )
 
 
-def make_eb_fixture() -> dict:
+def make_eb_fixture(rng: np.random.Generator) -> dict:
     period, t0, rp = 1.5, 0.4, 0.15
     time = _time_grid()
-    rng = np.random.default_rng(999954)
 
     params = {
         "period": period, "rp": rp, "t0": t0, "a": 8.0, "inc": 86.0,
@@ -95,10 +123,9 @@ def make_eb_fixture() -> dict:
     )
 
 
-def make_starspot_fixture() -> dict:
+def make_starspot_fixture(rng: np.random.Generator) -> dict:
     prot = 6.2
     time = _time_grid()
-    rng = np.random.default_rng(116797)
 
     params = {"prot": prot, "amp1": 0.012, "amp2": 0.004, "phase1": 0.7, "phase2": 1.9}
     signal = starspot_model(params, time)
@@ -118,12 +145,17 @@ def make_starspot_fixture() -> dict:
     )
 
 
-def make_null_fixture() -> dict:
+def make_null_fixture(rng: np.random.Generator) -> dict:
     time = _time_grid()
-    rng = np.random.default_rng(352471)
 
+    # White noise + mild red noise only — no injected signal, periodic or
+    # otherwise. The red component (correlated, ~3x quieter than the white
+    # floor) is what real quiet TESS targets actually look like; a search
+    # must not mistake it for a period.
     flux_err_val = 0.0004
-    flux = 1.0 + rng.normal(0, flux_err_val, time.size)
+    white = rng.normal(0, flux_err_val, time.size)
+    red = _red_noise(rng, time.size, sigma=flux_err_val * 0.3)
+    flux = 1.0 + white + red
     flux_err = np.full(time.size, flux_err_val)
 
     return dict(
@@ -132,9 +164,8 @@ def make_null_fixture() -> dict:
     )
 
 
-def make_unknown_fixture() -> dict:
+def make_unknown_fixture(rng: np.random.Generator) -> dict:
     time = _time_grid()
-    rng = np.random.default_rng(933939)
 
     # Deliberately ambiguous: broadband noise a bit louder than `null`, no
     # designed periodic signal — this class exists to exercise the
@@ -158,14 +189,21 @@ BUILDERS = {
 }
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args(argv)
+
+    rngs = _rngs(args.seed)
+
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for name, builder in BUILDERS.items():
-        data = builder()
+        data = builder(rngs[name])
         out_path = FIXTURES_DIR / f"fixture_{name}.npz"
         np.savez(out_path, **data)
+        size_kb = out_path.stat().st_size / 1024
         print(f"wrote {out_path.relative_to(ROOT)} ({data['time'].size} points, "
-              f"{BASELINE_DAYS:.0f}-day baseline)")
+              f"{BASELINE_DAYS:.1f}-day baseline, {size_kb:.1f} KB)")
 
 
 if __name__ == "__main__":

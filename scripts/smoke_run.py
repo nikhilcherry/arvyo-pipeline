@@ -33,6 +33,7 @@ from arvyo.views.views import make_views, phase_fold
 from arvyo.viz.plots import plot_fit
 
 DEFAULT_DATA_ROOT = "../arvyo-data/data/processed"
+DEFAULT_DOCS_SAMPLES_ROOT = "../arvyo-data/data/samples"
 ALL_LABELS = ["planet", "eb", "blend", "starspot", "null"]
 STAGE_NAMES = ["contract", "views", "tls", "synthesis", "inference", "vetting", "figure"]
 MODEL_NAMES = ["planet", "eb", "blend", "starspot"]
@@ -316,7 +317,12 @@ def main(argv=None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fast", action="store_true", help="halve emcee/sbi settings")
     parser.add_argument("--make-docs-figures", action="store_true",
-                         help="regenerate docs/figures/ from the smoke samples and exit")
+                         help="regenerate docs/figures/ from arvyo-data's committed "
+                              "data/samples/ (not the gitignored bulk corpus) and exit")
+    parser.add_argument("--docs-samples-root", default=DEFAULT_DOCS_SAMPLES_ROOT,
+                         help="root for --make-docs-figures (must be the committed "
+                              "one-sample-per-class dir, so figures are reproducible "
+                              "from a fresh clone without the bulk corpus)")
     args = parser.parse_args(argv)
 
     np.random.seed(args.seed)
@@ -326,16 +332,17 @@ def main(argv=None) -> int:
     except ImportError:
         pass
 
+    if args.make_docs_figures:
+        docs_picks = pick_samples(args.docs_samples_root, ALL_LABELS)
+        generate_docs_figures(docs_picks, seed=args.seed, fast=args.fast)
+        print(f"Regenerated docs figures into {DOCS_FIGURES_DIR}")
+        return 0
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     picks = pick_samples(args.data_root, args.labels)
     missing_labels = [label for label in args.labels if label not in picks]
-
-    if args.make_docs_figures:
-        generate_docs_figures(picks, seed=args.seed, fast=args.fast)
-        print(f"Regenerated docs figures into {DOCS_FIGURES_DIR}")
-        return 0
 
     if not picks:
         print(f"No samples found under {args.data_root} for labels {args.labels}", file=sys.stderr)

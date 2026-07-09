@@ -74,16 +74,22 @@ streamlit run app/dashboard.py                            # explore a sample
 
 ## How the pipeline works (visual walkthrough)
 
-These figures are generated straight from a real `planet`-labeled sample
-(`arvyo-data/data/processed/planet/75650448.npz`, TIC 75650448, 776 points,
-one TESS sector split across two orbits) run through every stage of the
-direct-module spine below — `scripts/smoke_run.py`, not the glue layer.
-Figure 8 pulls in whatever other classes happen to be available locally.
-Nothing here is cherry-picked or hand-edited; regenerate them yourself with
-the command at the bottom of this section, and diff against what's
-committed in `docs/figures/`.
+These figures are generated straight from a real `planet`-labeled sample —
+`arvyo-data/data/samples/planet/138644215.npz` (TIC 138644215, sector 40,
+19,611 points at 2-minute cadence over a 28.2-day baseline, `crowdsap=0.44`
+so more than half the aperture flux is *not* the target star) — run through
+every stage of the direct-module spine below via `scripts/smoke_run.py
+--make-docs-figures`, not the glue layer. Unlike the rest of `smoke_run.py`,
+which defaults to the gitignored bulk corpus, `--make-docs-figures` reads
+from `arvyo-data/data/samples/` (the committed one-file-per-class set from
+that repo's `scripts/export_samples.py`) specifically so these figures are
+reproducible from a fresh clone, without the bulk corpus. Figure 8 pulls in
+all 5 committed samples. Nothing here is cherry-picked or hand-edited;
+regenerate them yourself with the command at the bottom of this section, and
+diff against what's committed in `docs/figures/`.
 
-**1. Raw light curve** — the input: two visits, each with one visible dip.
+**1. Raw light curve** — the input: a full TESS sector at 2-minute cadence,
+dense enough that individual transits aren't visible by eye at this scale.
 
 ![raw light curve](docs/figures/01_raw_lightcurve.png)
 
@@ -92,54 +98,50 @@ local phase-folded views, the model's actual input representation.
 
 ![views](docs/figures/02_views.png)
 
-**3. TLS periodogram** — the strongest peak is at 9.09 days (SDE 20.1), but
-this sample's own metadata says the injected period is 18.18 days — almost
-exactly double. TLS itself flags this: *"1 of 3 transits without data. The
-true period may be twice the given period."* This is a real period-aliasing
-case, not a fixed one — the smoke run reports both periods and their
-relative difference (≈0.50) rather than silently accepting whichever TLS
-returns.
+**3. TLS periodogram** — one dominant, clean peak at 1.545 days, SDE 16.8
+(more than double the 7.0 detection gate). This recovers the sample's own
+`period_days` metadata (1.54493 d) to within 0.013% — no aliasing here,
+unlike an earlier version of this walkthrough built from a different sample.
 
 ![TLS periodogram](docs/figures/03_tls_periodogram.png)
 
-**4. Phase-folded + binned curve** — the data folded at TLS's (aliased)
-9.09-day period, with the binned global view overlaid.
+**4. Phase-folded + binned curve** — the data folded at TLS's 1.545-day
+period, with the binned global view overlaid.
 
 ![phase fold](docs/figures/04_phase_fold.png)
 
 **5. Four competing hypotheses** — planet / EB / blend / starspot all fit to
-the same data. **`best_explanation` picks `blend` here, not `planet`** (chi²
-777.5 vs. 794.4 — a 2% difference), even though the sample is labeled
-`planet`. This is the same planet/blend degeneracy already documented in
-`tests/test_end_to_end.py`: blend's free `dilution` parameter can absorb a
-small residual (here, plausibly worsened by folding at the aliased half
-period) and edge out the true model on chi² alone. It happened on all four
-locally-available samples in this smoke set (`eb`, `starspot`, and `null`
-also rank `blend` first) — this is a known, pre-existing limitation of
-chi²-only ranking, not something this smoke-testing session fixed or hid.
+the same data. `best_explanation` picks `planet`, matching the true label —
+but only just: chi² is 19726.59 for `planet` vs. 19726.71 for `blend`, a
+difference of ~0.12 out of ~19700 (effectively a statistical tie). This is
+the same planet/blend degeneracy documented in `tests/test_end_to_end.py`:
+blend's free `dilution` parameter tracks planet almost exactly at this
+`crowdsap`, and a different noise draw or seed could easily flip the winner.
+`eb` (19747.4) and `starspot` (19848.3) are both clearly worse fits.
 
 ![four hypotheses](docs/figures/05_four_hypotheses.png)
 
 **6. emcee posteriors** — period/duration/depth marginals from `fit_emcee`,
-seeded at TLS's (aliased) period; the posterior is tight because the fit
-converges cleanly, not because the period is correct.
+seeded at TLS's period; tight marginals here reflect both a clean fit and an
+accurately recovered period.
 
 ![posteriors](docs/figures/06_posteriors.png)
 
 **7. Vetting** — odd/even and secondary-eclipse checks at the TLS ephemeris.
-For this sample the odd-transit depth comes back `NaN`: with only ~2 orbits
-of data folded at the aliased 9.09-day period, one of the three expected
-odd-cycle transits falls in the same data gap TLS already warned about, so
-`arvyo/vetting/vet.py` has no in-transit points to measure there. This is
-reported as `null` in the JSON (see the NaN-sanitizing note below), not
-papered over with a fabricated number.
+Odd-transit depth (0.0060) comes out visibly deeper than even-transit depth
+(0.0043, diff 1.70e-3) — real per-transit scatter on a single, moderately
+diluted sector, not a fabricated or suppressed number; a genuine EB false
+positive would typically show this same signature, so this number alone
+doesn't clear the target, it's the secondary check (below) and the transit
+shape that argue for `planet` here. Secondary/primary depth ratio is ~0.003
+— no secondary eclipse detected.
 
 ![vetting](docs/figures/07_vetting.png)
 
-**8. Class gallery** — phase-folded curves for every class with a local
-sample. `blend` has zero samples under `arvyo-data/data/processed/` at the
-time these figures were generated, so it's captioned as missing rather than
-faked.
+**8. Class gallery** — phase-folded curves for all 5 committed samples,
+including `blend` (real Kepler DR25 centroid-offset data, KIC 6974867) —
+Phase 2 of this hardening pass added a committed `blend` sample, so this
+panel no longer has to caption a missing class.
 
 ![class gallery](docs/figures/08_class_gallery.png)
 
@@ -155,8 +157,15 @@ python scripts/smoke_run.py --data-root ../arvyo-data/data/processed --seed 42
 Exit code is `0` if every attempted stage on every sample passed, `1` if any
 stage failed, `2` if no samples were found. Pass `--fast` to halve the
 emcee/sbi settings for a quicker (still real, just noisier) run. Regenerate
-the 8 figures above with `--make-docs-figures` (uses the same `--seed`/
-`--fast` flags, and only needs a local `planet` sample).
+the 8 figures above with:
+
+```bash
+python scripts/smoke_run.py --make-docs-figures --seed 42
+```
+
+This reads from `../arvyo-data/data/samples/` by default (override with
+`--docs-samples-root`), not `--data-root`, so it only needs the committed
+samples — the same `--seed`/`--fast` flags apply.
 
 ## Glue layer: foldr -> fitr -> batchr
 

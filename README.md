@@ -72,6 +72,13 @@ pytest                                                    # run tests
 streamlit run app/dashboard.py                            # explore a sample
 ```
 
+For a fully pinned, reproducible setup — pinned dependency versions, all
+five glue-layer tools installed from `git+https` at a specific commit SHA,
+a sibling-clone health check, and a smoke test — see
+[`docs/finale_setup.md`](docs/finale_setup.md) instead. That's the one
+canonical copy-pasteable cell; this quickstart is the fast/unpinned path
+for day-to-day development.
+
 ## How the pipeline works (visual walkthrough)
 
 These figures are generated straight from a real `planet`-labeled sample —
@@ -194,6 +201,9 @@ Install the pipeline tools (kept out of the base deps to stay lean):
 ```bash
 pip install -e ".[pipeline]"
 ```
+
+(Unpinned — resolves each tool's `main` branch. For pinned-to-commit-SHA
+installs of all five tools, see [`docs/finale_setup.md`](docs/finale_setup.md).)
 
 ### Quickstart
 

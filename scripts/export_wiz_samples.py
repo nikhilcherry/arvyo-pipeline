@@ -1,29 +1,28 @@
 #!/usr/bin/env python
-"""Convert frozen-contract .npz fixtures into arvyo-wiz's sample JSON format.
+"""Convert frozen-contract .npz samples into arvyo-wiz's sample JSON format.
 
-Sources (see README notes in both repos for why):
-  planet/eb/starspot/null <- tests/fixtures/fixture_*.npz (this repo)
-  blend                   <- ../arvyo-data/data/samples/blend/4281068.npz
-                             (KIC 4281068 / KOI K07689.01, a real Robovetter
-                             koi_fpflag_co==1 centroid-offset false positive,
-                             deterministically selected by arvyo-data's
-                             scripts/08_select_blend_sample.py catalog filter
-                             for being the top-SNR candidate that also clears
-                             arvyo-pipeline's TLS SDE>=7.0 detection gate
-                             (SDE ~18.9) — arvyo-data's TESS `blend` class is
-                             synthetic-only, so this is the one real example
-                             available. Pulled from arvyo-data's committed
-                             data/samples/ (not the gitignored bulk
-                             data/kepler/processed/ pool) so this script
-                             reproduces from a fresh clone of both repos.
+Sources: ALL five classes now come from arvyo-data's committed real targets
+under ../arvyo-data/data/samples/<label>/*.npz (see that repo's
+data/samples/PROVENANCE.md for how each one was selected/exported). This
+script no longer reads tests/fixtures/ at all — those are arvyo-pipeline's
+own synthetic unit-test fixtures (see tests/make_fixtures.py /
+scripts/regenerate_fixtures.py), a different concern from "what does
+arvyo-wiz show a user," and `blend` in particular was already real-data-only
+(arvyo-data's synthetic `blend` generation isn't a thing; the one real
+example is KIC 4281068 / KOI K07689.01, a Robovetter koi_fpflag_co==1
+centroid-offset false positive that clears arvyo-pipeline's TLS SDE>=7.0
+gate at SDE~18.9 — see arvyo-data's scripts/08_select_blend_sample.py).
+Routing planet/eb/starspot/null onto arvyo-data's real samples the same way
+just makes all five classes consistent, and reproducible from a fresh clone
+of both repos without the gitignored bulk corpus.
 
 Each output JSON feeds arvyo-wiz's VerdictPanel/GraphDetail/LightCurvePanel
 directly. The light curve is phase-folded (true orbital phase when
-period_days/epoch_btjd are known, else a centered/normalized time axis) and
-decimated to <=200 points. Classifier confidence, per-model deltaLogZ, and
-SBI posterior params are hand-authored illustrative values, not run through
-the real classifier/SBI stack — same spirit as arvyo-wiz's physics.js
-`verdictFor`, which is explicitly labeled "SIMULATED VERDICT".
+period_days/epoch_btjd are known and finite, else a centered/normalized time
+axis) and decimated to <=200 points. Classifier confidence, per-model
+deltaLogZ, and SBI posterior params are hand-authored illustrative values,
+not run through the real classifier/SBI stack — same spirit as arvyo-wiz's
+physics.js `verdictFor`, which is explicitly labeled "SIMULATED VERDICT".
 """
 import json
 import sys
@@ -35,9 +34,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from arvyo.contract import load_sample
-FIXTURES_DIR = ROOT / "tests" / "fixtures"
-BLEND_SOURCE = ROOT.parent / "arvyo-data" / "data" / "samples" / "blend" / "4281068.npz"
+
+DATA_ROOT = ROOT.parent / "arvyo-data"
+DATA_SAMPLES_DIR = DATA_ROOT / "data" / "samples"
 OUT_DIR = ROOT.parent / "arvyo-wiz" / "src" / "data" / "samples"
+
+CLASSES = ["planet", "eb", "blend", "starspot", "null"]
 
 MAX_POINTS = 200
 
@@ -86,11 +88,20 @@ def decimate(length, max_points=MAX_POINTS):
     return np.unique(np.round(np.linspace(0, length - 1, max_points)).astype(int))
 
 
+def _finite(x):
+    """True only for a real, finite number. Real arvyo-data samples store
+    period_days/epoch_btjd as NaN (not a missing key) when unknown — e.g.
+    starspot's epoch_btjd, null's period_days/epoch_btjd — so a plain
+    truthiness check (`if period_days:`) is wrong here: NaN is truthy in
+    Python and would silently fold the light curve into a NaN phase axis."""
+    return x is not None and np.isfinite(x)
+
+
 def compute_phase(time, period_days, epoch_btjd):
     """True orbital phase in [-0.5, 0.5) when period info is known, else a
     centered/baseline-normalized time axis (still roughly [-0.5, 0.5]) so
     GraphDetail's default view bounds work unchanged for every sample."""
-    if period_days and epoch_btjd is not None:
+    if _finite(period_days) and _finite(epoch_btjd):
         phase = ((time - epoch_btjd) / period_days + 0.5) % 1.0 - 0.5
         folded = True
     else:
@@ -121,7 +132,7 @@ def build_sbi_params(cls, sample, phase, flux):
         "aOverRs": {"p16": 6.7, "p50": 7.0, "p84": 7.3} if cls != "eb" else {"p16": 5.2, "p50": 5.5, "p84": 5.8},
         "inclinationDeg": {"p16": 88.6, "p50": 89.1, "p84": 89.6} if cls != "eb" else {"p16": 83.6, "p50": 84.1, "p84": 84.6},
     }
-    if period_days:
+    if _finite(period_days):
         jitter = period_days * 1e-4
         params["periodDays"] = {
             "p16": round(period_days - jitter, 6),
@@ -131,7 +142,7 @@ def build_sbi_params(cls, sample, phase, flux):
     return params
 
 
-def convert(path, cls, sample_id, source_repo, source_path, mission_default):
+def convert(path, cls, source_path):
     sample = load_sample(path)
     time = sample["time"]
     flux = sample["flux"]
@@ -148,19 +159,25 @@ def convert(path, cls, sample_id, source_repo, source_path, mission_default):
     verdict = build_verdict(cls)
     sbi_params = build_sbi_params(cls, sample, phase, flux)
 
+    tic_id = int(sample["tic_id"])
     out = {
-        "sampleId": sample_id,
+        "sampleId": f"real-{cls}-{tic_id}",
         "class": cls,
         "source": {
-            "repo": source_repo,
+            "repo": "arvyo-data",
             "path": source_path,
-            "ticId": int(sample["tic_id"]),
+            "ticId": tic_id,
             "sector": int(sample["sector"]),
-            "mission": sample.get("mission", mission_default),
+            # only `blend` (Kepler) carries an explicit mission key; the
+            # TESS classes omit it entirely, hence the get()-with-default.
+            "mission": sample.get("mission", "TESS"),
         },
         "meta": {
-            "periodDays": period_days,
-            "epochBtjd": epoch_btjd,
+            # NaN is not valid JSON (breaks JSON.parse in the browser) and
+            # also isn't meaningful here — starspot has no epoch, null has
+            # neither — so both come through as JSON null, not NaN.
+            "periodDays": float(period_days) if _finite(period_days) else None,
+            "epochBtjd": float(epoch_btjd) if _finite(epoch_btjd) else None,
             "crowdsap": sample.get("crowdsap"),
             "folded": folded,
         },
@@ -175,28 +192,37 @@ def convert(path, cls, sample_id, source_repo, source_path, mission_default):
     return out
 
 
-SPECS = [
-    dict(path=FIXTURES_DIR / "fixture_planet.npz", cls="planet",
-         sample_id="pipeline-planet-300494", source_repo="arvyo-pipeline",
-         source_path="tests/fixtures/fixture_planet.npz", mission_default="TESS"),
-    dict(path=FIXTURES_DIR / "fixture_eb.npz", cls="eb",
-         sample_id="pipeline-eb-999954", source_repo="arvyo-pipeline",
-         source_path="tests/fixtures/fixture_eb.npz", mission_default="TESS"),
-    dict(path=FIXTURES_DIR / "fixture_starspot.npz", cls="starspot",
-         sample_id="pipeline-starspot-116797", source_repo="arvyo-pipeline",
-         source_path="tests/fixtures/fixture_starspot.npz", mission_default="TESS"),
-    dict(path=FIXTURES_DIR / "fixture_null.npz", cls="null",
-         sample_id="pipeline-null-352471", source_repo="arvyo-pipeline",
-         source_path="tests/fixtures/fixture_null.npz", mission_default="TESS"),
-    dict(path=BLEND_SOURCE, cls="blend",
-         sample_id="pipeline-blend-4281068", source_repo="arvyo-data",
-         source_path="data/samples/blend/4281068.npz", mission_default="Kepler"),
-]
+def discover_specs():
+    """One committed real sample per class, from arvyo-data/data/samples/.
+
+    Raises loudly (missing dir / no file / more than one file) rather than
+    silently skipping a class or picking an arbitrary one — a class-name
+    typo or an extra file left behind should fail the export, not produce a
+    quietly wrong sample set.
+    """
+    specs = []
+    for cls in CLASSES:
+        class_dir = DATA_SAMPLES_DIR / cls
+        matches = sorted(class_dir.glob("*.npz"))
+        if not matches:
+            raise FileNotFoundError(
+                f"no committed .npz sample for class {cls!r} under {class_dir} "
+                "(expected arvyo-data as a sibling checkout with data/samples/ populated)"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"expected exactly one committed sample for class {cls!r} under "
+                f"{class_dir}, found {len(matches)}: {[m.name for m in matches]}"
+            )
+        path = matches[0]
+        source_path = str(path.relative_to(DATA_ROOT))
+        specs.append(dict(path=path, cls=cls, source_path=source_path))
+    return specs
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for spec in SPECS:
+    for spec in discover_specs():
         out = convert(**spec)
         out_path = OUT_DIR / f"{spec['cls']}.json"
         out_path.write_text(json.dumps(out, indent=2) + "\n")

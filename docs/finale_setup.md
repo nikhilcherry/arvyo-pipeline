@@ -97,15 +97,11 @@ python -m pip install git+https://github.com/nikhilcherry/foldr.git@06000df3ba15
 python -m pip install git+https://github.com/nikhilcherry/fitr.git@ca63fa0a8b5e635202f6d3206c3f3392fc273c25
 ```
 
-> **`batchr` pin note:** `63cd15b2e771339571c6880d6d6bd8ce0e35b87f` is the
-> local `batchr` HEAD as of this doc's last edit, but it had not yet been
-> `git push`-ed at verification time — pip's git fetch will 404
-> (`not our ref`) against a SHA that only exists locally. The verification
-> run below therefore actually installed the last **pushed** SHA,
-> `b6471c0cf31296b072a4933a6d7bff1976ca1c26` (one commit behind), which
-> resolves fine and exercises the same cwd-import fix. Once
-> `63cd15b` is pushed, re-run this cell with that SHA to re-verify and
-> update this note.
+> **`batchr` pin note (resolved):** at verification time,
+> `63cd15b2e771339571c6880d6d6bd8ce0e35b87f` had not yet been pushed, so the
+> log below installed the last-pushed SHA (`b6471c0`) instead. `batchr` has
+> since been pushed — `pip install git+https://github.com/nikhilcherry/batchr.git@63cd15b2e771339571c6880d6d6bd8ce0e35b87f`
+> now resolves and installs cleanly (spot-checked 2026-07-10, post-push).
 
 `peekr` is not currently imported or shelled out to anywhere in
 `arvyo-pipeline` (it's a standalone data-exploration tool) — it's installed

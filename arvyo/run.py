@@ -33,7 +33,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _cmd_one(args: argparse.Namespace) -> int:
     config = PipelineConfig.load(args.config) if args.config else PipelineConfig.load()
-    result = process_target(args.path, config, use_catalog_period=args.use_catalog_period)
+    centroid_vet = True if args.centroid_vet else (False if args.no_centroid_vet else None)
+    result = process_target(
+        args.path, config,
+        use_catalog_period=args.use_catalog_period,
+        centroid_vet=centroid_vet,
+    )
     print(json.dumps(result, indent=2))
     return 0
 
@@ -213,6 +218,18 @@ def build_parser() -> argparse.ArgumentParser:
             "period_days/epoch_btjd metadata instead. Useful for demoing "
             "fitr on targets with a known ephemeris."
         ),
+    )
+    p_one.add_argument(
+        "--centroid-vet", action="store_true",
+        help=(
+            "Run localizr's centroid-offset check when the verdict is a "
+            "planet/blend case, overriding config's centroid_vetting_enabled "
+            "to on. Needs live network access to MAST/Gaia."
+        ),
+    )
+    p_one.add_argument(
+        "--no-centroid-vet", action="store_true",
+        help="Force centroid vetting off, overriding config's centroid_vetting_enabled.",
     )
     p_one.set_defaults(func=_cmd_one)
 

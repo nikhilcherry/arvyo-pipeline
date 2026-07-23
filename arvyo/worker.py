@@ -1,11 +1,13 @@
-"""arvyo/worker.py — glue layer: foldr (period search) -> fitr (4-model fit).
+"""arvyo/worker.py — glue layer: foldr (period search) -> fitr (4-model fit)
+-> localizr (opt-in centroid-offset vetting for the planet/blend degeneracy).
 
-Both tools are invoked ONLY via their CLI + JSON stdout + exit codes, never
-imported as libraries: their published CLI/JSON/exit-code interface is
+Every tool is invoked ONLY via its CLI + JSON stdout + exit codes, never
+imported as a library: their published CLI/JSON/exit-code interface is
 frozen the same way arvyo/contract.py's .npz schema is. See each tool's
 README for the interface this module relies on:
   https://github.com/nikhilcherry/foldr
   https://github.com/nikhilcherry/fitr
+  https://github.com/nikhilcherry/localizr
 """
 
 from __future__ import annotations
@@ -84,12 +86,87 @@ def _failure_message(returncode, stderr, tool_error, tool_name) -> str:
     return f"{tool_name} exited {returncode} with no parseable JSON on stdout"
 
 
+def _run_centroid_vetting(
+    sample: dict,
+    period_search: dict,
+    verdict: str,
+    winner: str | None,
+    model_fit: dict | None,
+    config: PipelineConfig,
+    centroid_vet: bool,
+) -> dict | None:
+    """localizr's on-target/off-target-blend check -- opt-in, since it needs
+    live network access to MAST + Gaia for a real target pixel file.
+
+    Only ever attempted for the exact case localizr exists to resolve, per
+    fitr's own README: "blend vs planet is often genuinely degenerate from
+    photometry alone -- the real discriminator is a centroid offset, which
+    fitr never sees." That's either a "clear" planet/blend winner (localizr
+    can still catch a diluted blend fitr called "planet" with high
+    confidence) or an "ambiguous" verdict where planet and blend are tied.
+    Any other verdict returns None (not attempted, not applicable) rather
+    than a dict, so untouched results stay byte-identical to before this
+    field existed.
+    """
+    if not centroid_vet:
+        return None
+
+    candidates: set[str] = set()
+    if verdict == "clear" and winner in ("planet", "blend"):
+        candidates = {winner}
+    elif verdict == "ambiguous" and model_fit is not None:
+        tied = set(model_fit.get("tied_models") or [])
+        if "planet" in tied and "blend" in tied:
+            candidates = {"planet", "blend"}
+    if not candidates:
+        return {"ran": False, "skipped_reason": "verdict/winner is not a planet/blend case"}
+
+    tic_id = sample.get("tic_id")
+    if tic_id is None:
+        return {"ran": False, "skipped_reason": "no tic_id/kic_id in .npz metadata"}
+
+    period = period_search.get("period")
+    epoch = period_search.get("t0")
+    duration_hours = period_search.get("duration_hours")
+    if period is None or epoch is None or duration_hours is None:
+        # The --use-catalog-period path leaves duration_hours unset (foldr
+        # never ran to measure it), and localizr requires it explicitly.
+        return {
+            "ran": False,
+            "skipped_reason": "period/epoch/duration_hours not all available "
+            "(centroid vetting needs foldr's search output, not --use-catalog-period)",
+        }
+
+    mission = str(sample.get("mission") or "tess").strip().lower()
+    id_flag = "--kic-id" if mission == "kepler" else "--tic-id"
+
+    returncode, payload, stderr, duration, tool_error = _invoke_tool(
+        "localizr",
+        [
+            "localize", id_flag, str(tic_id),
+            "--period", str(period),
+            "--epoch", str(epoch),
+            "--duration-hours", str(duration_hours),
+            "--json",
+        ],
+        config.localizr_timeout_s,
+    )
+    if payload is None:
+        return {
+            "ran": False,
+            "skipped_reason": _failure_message(returncode, stderr, tool_error, "localizr"),
+        }
+    return {"ran": True, "runtime_s": duration, **payload}
+
+
 def process_target(
     npz_path: str | Path,
     config: PipelineConfig | None = None,
     use_catalog_period: bool = False,
+    centroid_vet: bool | None = None,
 ) -> dict:
-    """Run foldr then fitr on one .npz target; always returns a result dict.
+    """Run foldr then fitr (then, opt-in, localizr) on one .npz target;
+    always returns a result dict.
 
     Never raises for tool-level failures (bad file, foldr/fitr crash or
     timeout, a non-clear fitr verdict) — every input produces exactly one
@@ -103,10 +180,18 @@ def process_target(
     phase error (a real, small period/epoch mismatch that a rigid
     `t0_shift` can't fully absorb and that model-comparison can pick up
     on; catalog values don't have this error).
+
+    `centroid_vet` runs localizr's on-target/off-target-blend check when
+    the verdict is a planet/blend case (see _run_centroid_vetting); it
+    needs live network access to MAST/Gaia, so it defaults to
+    `config.centroid_vetting_enabled` (itself off by default) rather than
+    always-on. Pass True/False explicitly to override the config.
     """
     if config is not None and not isinstance(config, PipelineConfig):
         raise TypeError(f"config must be a PipelineConfig or None, got {type(config)!r}")
     config = config or PipelineConfig.load()
+    if centroid_vet is None:
+        centroid_vet = config.centroid_vetting_enabled
 
     npz_path = Path(npz_path)
     total_start = time.monotonic()
@@ -244,11 +329,17 @@ def process_target(
     verdict = exit_verdicts[returncode]
     winner = payload.get("winner") if verdict == "clear" else None
 
+    # --- step 5: localizr's centroid-offset vetting (opt-in) --------------
+    centroid_vetting = _run_centroid_vetting(
+        sample, period_search, verdict, winner, payload, config, centroid_vet
+    )
+
     return _finish(
         input=input_meta,
         period_search=period_search,
         model_fit=payload,
         verdict=verdict,
         winner=winner,
+        centroid_vetting=centroid_vetting,
         error=None,
     )

@@ -10,6 +10,58 @@ writes into `arvyo-data/`; it only reads processed `.npz` files via the
 configurable `data.processed_root` path in `configs/default.yaml`
 (default `../arvyo-data/data/processed`).
 
+## Toolkit ecosystem
+
+Every non-`arvyo-*` box below is a standalone, independently-published tool
+(own repo, own README, own tests) — none of them import each other's
+internals. `arvyo-pipeline` (this repo) is the analysis half; `arvyo-data`
+is the dataset half; they meet at the frozen `.npz` contract below.
+
+```mermaid
+flowchart TD
+    subgraph DATA["arvyo-data: dataset builder"]
+        FETCHR["fetchr<br/>Kaggle/MAST sync + verify"]
+        INJECTR["injectr<br/>synthetic planet/EB/blend/starspot injection"]
+        NPZ[".npz files<br/>time, flux, flux_err + meta"]
+        FETCHR --> NPZ
+        INJECTR --> NPZ
+    end
+
+    subgraph PIPE["arvyo-pipeline: this repo"]
+        CONTRACT["arvyo.contract<br/>validate against schema-1.0"]
+        FOLDR["foldr<br/>BLS/TLS period search"]
+        FITR["fitr<br/>planet / eb / blend / starspot<br/>analysis-by-synthesis fit"]
+        VET["arvyo.vetting.vet<br/>odd-even + secondary eclipse<br/>offline, no network"]
+        LOCALIZR["localizr, opt-in<br/>centroid-offset vetting<br/>needs MAST + Gaia network"]
+        RESULT["result JSON, schema v1.1<br/>verdict + winner + centroid_vetting"]
+        CONTRACT --> FOLDR --> FITR --> VET --> RESULT
+        FITR -. clear planet/blend or ambiguous tie .-> LOCALIZR
+        LOCALIZR -.-> RESULT
+    end
+
+    subgraph ORCH["orchestration"]
+        BATCHR["batchr<br/>cached, resumable, parallel bulk runs"]
+        TRACKR["trackr<br/>run/metric logging, optional"]
+        BATCHR -.-> TRACKR
+    end
+
+    PEEKR["peekr<br/>sanity-check any .npz<br/>NaN/Inf, outliers, schema drift"]
+    WIZ["arvyo-wiz<br/>3D transit simulator, visual demo"]
+
+    NPZ --> CONTRACT
+    NPZ -. spot-check .-> PEEKR
+    NPZ -. sample data .-> WIZ
+    RESULT --> BATCHR
+```
+
+`peekr` isn't wired into the pipeline programmatically — it's a
+general-purpose data-quality CLI, meant to be run by hand (or in CI) against
+`arvyo-data`'s output *before* trusting it as pipeline input:
+`peekr path/to/sample.npz` catches NaNs/Infs, near-constant flux, and
+outliers that would otherwise surface as a confusing downstream `fitr` or
+`localizr` failure instead of a clear "this file is bad" message at the
+source.
+
 ## Data Contract
 
 The `.npz` schema produced by `arvyo-data` is the ONLY interface between
@@ -48,7 +100,7 @@ arvyo-pipeline/
 │   ├── models/              # dual-branch 1D CNN encoder + classifier/novelty heads
 │   ├── synthesis/           # batman x4 hypothesis forward models
 │   ├── inference/           # emcee (primary) + sbi (fallback) posteriors
-│   ├── vetting/vet.py       # odd-even + secondary-eclipse checks
+│   ├── vetting/vet.py       # odd-even + secondary-eclipse checks (offline, no network)
 │   └── viz/plots.py         # phase-fold + model-fit + residual figure
 ├── app/dashboard.py         # Streamlit skeleton
 ├── benchmarks/              # how to run ExoMiner + triceratops (comparison oracles)
@@ -57,7 +109,7 @@ arvyo-pipeline/
 ```
 
 The glue layer (see below) lives alongside the above in `arvyo/`:
-`worker.py` (per-target foldr->fitr), `batch_worker.py` (batchr's
+`worker.py` (per-target foldr->fitr->localizr), `batch_worker.py` (batchr's
 per-item entry point), `run.py` (`python -m arvyo.run` CLI),
 `pipeline_config.py`, `result_schema.py`, `_toolchain.py`.
 
@@ -177,11 +229,11 @@ This reads from `../arvyo-data/data/samples/` by default (override with
 `--docs-samples-root`), not `--data-root`, so it only needs the committed
 samples — the same `--seed`/`--fast` flags apply.
 
-## Glue layer: foldr -> fitr -> batchr
+## Glue layer: foldr -> fitr -> localizr (opt-in) -> batchr
 
 `arvyo/worker.py`, `arvyo/batch_worker.py`, and `arvyo/run.py` are pure
-orchestration — they never import `foldr`/`fitr` internals, only invoke
-their published CLIs and parse stdout JSON + exit codes, since those
+orchestration — they never import `foldr`/`fitr`/`localizr` internals, only
+invoke their published CLIs and parse stdout JSON + exit codes, since those
 interfaces (like the `.npz` contract above) are frozen. Per target:
 
 1. `arvyo.contract.load_sample` validates the `.npz` against the schema above.
@@ -195,7 +247,12 @@ interfaces (like the `.npz` contract above) are frozen. Per target:
    becomes the verdict: `0`→`clear`, `3`→`ambiguous`, `4`→`no_significant_signal`,
    anything else (or unparseable stdout) → `error`. fitr's JSON is embedded
    verbatim under `model_fit` — never reshaped.
-4. **batchr** (`arvyo.run all`) drives this over a manifest with caching/resume;
+4. **localizr** (opt-in — see below) runs its centroid-offset check when the
+   verdict is exactly the case it exists to resolve: a `clear` `planet` or
+   `blend` winner, or an `ambiguous` verdict with both tied. This is the
+   real discriminator fitr's own model comparison structurally can't provide
+   (see "Vetting" below).
+5. **batchr** (`arvyo.run all`) drives this over a manifest with caching/resume;
    **trackr**, if installed, gets a best-effort run summary (optional, never
    fails the run).
 
@@ -206,7 +263,43 @@ pip install -e ".[pipeline]"
 ```
 
 (Unpinned — resolves each tool's `main` branch. For pinned-to-commit-SHA
-installs of all five tools, see [`docs/finale_setup.md`](docs/finale_setup.md).)
+installs of all six tools, see [`docs/finale_setup.md`](docs/finale_setup.md).)
+
+### Centroid vetting (localizr)
+
+fitr's own README is explicit about a structural blind spot: *"blend vs
+planet is often genuinely degenerate from photometry alone — the real
+discriminator is a centroid offset, which fitr never sees."* localizr closes
+that gap by looking at where the light is actually moving on the detector
+during transit (difference imaging against the target's own TESS/Kepler
+pixel data), not just at the light curve fitr fits.
+
+It's **off by default** (`centroid_vetting_enabled: false` in
+`configs/default.yaml`) because it needs live network access to MAST + Gaia
+for a real target pixel file — most CI/offline/test environments don't have
+that, and every existing test fixture uses a synthetic `tic_id` with no real
+MAST counterpart anyway. Turn it on:
+
+```bash
+# per-invocation, overriding config either direction
+python -m arvyo.run one TARGET.npz --centroid-vet
+python -m arvyo.run one TARGET.npz --no-centroid-vet
+
+# or persistently, in configs/default.yaml:
+#   pipeline:
+#     centroid_vetting_enabled: true
+```
+
+When it runs, its raw JSON (`verdict`: `on_target` | `off_target_blend` |
+`inconclusive`, plus `centroid_offset_arcsec`/`centroid_offset_sigma`) is
+embedded verbatim under the result's `centroid_vetting` key, alongside a
+`ran: true` marker. When it doesn't run — disabled, verdict isn't a
+planet/blend case, no `tic_id` in the `.npz`, `--use-catalog-period` left no
+`duration_hours` for it to use, or the live call itself failed (no network,
+no MAST match, `localizr` not installed) — `centroid_vetting` is
+`{"ran": false, "skipped_reason": "..."}` instead, and the rest of the
+result is unaffected either way: centroid vetting is a diagnostic add-on
+that can only add information, never override fitr's own verdict.
 
 ### Quickstart
 
@@ -225,20 +318,24 @@ python -m arvyo.run all manifest.csv --results-dir results/
 python -m arvyo.run summarize results/
 ```
 
-### Result JSON schema (v1.0)
+### Result JSON schema (v1.1)
 
 Frozen in `arvyo/result_schema.py`; every target produces exactly one of
 these, even on tool failure/timeout/bad input — `process_target` never
 raises for tool-level errors, only for programmer errors (bad `config`).
+(v1.1 added `centroid_vetting`, additively — every pre-1.1 key is unchanged,
+so v1.0 consumers reading `input`/`period_search`/`model_fit`/`verdict`/
+`winner`/`error`/`runtime_s`/`versions` still work.)
 
 | Key | Type | Notes |
 |---|---|---|
-| `schema_version` | str | `"1.0"` |
+| `schema_version` | str | `"1.1"` |
 | `input` | dict | `path`, `tic_id`, `label`, `sector` from the `.npz` |
 | `period_search` | dict \| null | foldr's output: `engine`, `period`, `t0`, `duration_hours`, `depth_ppm`, `snr`, `sde`, `passed_gate`; `null` if foldr never ran |
 | `model_fit` | dict \| null | fitr's JSON, embedded verbatim; `null` unless verdict is `clear`/`ambiguous`/`no_significant_signal` |
 | `verdict` | str | see vocabulary below |
 | `winner` | str \| null | fitr's winning model, only set when `verdict == "clear"` |
+| `centroid_vetting` | dict \| null | localizr's JSON verbatim + `ran: true`, or `{"ran": false, "skipped_reason": ...}`, or `null` if centroid vetting was never attempted at all (disabled). See "Centroid vetting" above. |
 | `error` | dict \| null | `{"stage": ..., "message": ...}`; `stage` is one of `contract_validation`, `period_search`, `model_fit` |
 | `runtime_s` | dict | `foldr`, `fitr`, `total` wall-clock seconds |
 | `versions` | dict | `foldr`, `fitr`, `arvyo_pipeline` version strings |

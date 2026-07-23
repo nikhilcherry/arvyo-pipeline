@@ -8,11 +8,19 @@ model:
   global_bins: 201
   local_bins: 81
 
-# arvyo/worker.py glue-layer settings: foldr -> fitr per-target pipeline.
-# sde_min/snr_min gate foldr's candidate period (pass if EITHER is met).
+# arvyo/worker.py glue-layer settings: foldr -> fitr -> localizr per-target
+# pipeline. sde_min/snr_min gate foldr's candidate period (pass if EITHER
+# is met).
 pipeline:
   sde_min: 7.0
   snr_min: 7.0
   foldr_timeout_s: 300
   fitr_timeout_s: 600
   results_dir: results
+  # localizr's centroid-offset check for the planet/blend degeneracy
+  # (see worker.py's _run_centroid_vetting). Off by default: it needs
+  # live network access to MAST/Gaia for a real target pixel file, which
+  # most test/CI/offline environments don't have. Override per-invocation
+  # with `arvyo.run one --centroid-vet` / `--no-centroid-vet`.
+  centroid_vetting_enabled: false
+  localizr_timeout_s: 120

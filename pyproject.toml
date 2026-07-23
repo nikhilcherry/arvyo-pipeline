@@ -28,6 +28,7 @@ pipeline = [
     "fitr @ git+https://github.com/nikhilcherry/fitr",
     "batchr @ git+https://github.com/nikhilcherry/batchr",
     "trackr @ git+https://github.com/nikhilcherry/trackr",
+    "localizr @ git+https://github.com/nikhilcherry/localizr",
 ]
 
 [build-system]

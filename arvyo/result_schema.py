@@ -7,7 +7,7 @@ bumping SCHEMA_VERSION.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 VERDICTS = {"clear", "ambiguous", "no_significant_signal", "no_period", "error"}
 
@@ -18,6 +18,7 @@ TOP_LEVEL_KEYS = {
     "model_fit",
     "verdict",
     "winner",
+    "centroid_vetting",
     "error",
     "runtime_s",
     "versions",
@@ -79,8 +80,18 @@ def new_result(
     error: dict | None,
     runtime_s: dict,
     versions: dict,
+    centroid_vetting: dict | None = None,
 ) -> dict:
-    """Build a schema-v1.0 result dict with a stable key order."""
+    """Build a schema-v1.1 result dict with a stable key order.
+
+    `centroid_vetting` is new in 1.1 (localizr's on-target/off-target-blend
+    check) and always defaults to None so every pre-1.1 call site keeps
+    working unchanged: it's only ever non-None when centroid vetting was
+    actually attempted for this target (see worker.py's
+    _run_centroid_vetting), which itself is opt-in
+    (PipelineConfig.centroid_vetting_enabled) since it needs live network
+    access to MAST/Gaia.
+    """
     result = {
         "schema_version": SCHEMA_VERSION,
         "input": input,
@@ -88,6 +99,7 @@ def new_result(
         "model_fit": model_fit,
         "verdict": verdict,
         "winner": winner,
+        "centroid_vetting": centroid_vetting,
         "error": error,
         "runtime_s": runtime_s,
         "versions": versions,

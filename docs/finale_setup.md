@@ -14,13 +14,13 @@ smoke run was well under 5 minutes on a 16-thread machine with wheels
 already warm in pip's cache; a fully cold cache (first-time downloads,
 especially `torch`) will take longer.
 
-**Policy reminder** (workspace-wide, not just this doc): team Arvyo's five
-tools — `trackr`, `batchr`, `peekr`, `foldr`, `fitr` — are **never**
-installed with a bare `pip install <name>`. None of them are published to
-PyPI, and at least one of those names (`foldr`) is squatted by an unrelated
-package there, so a bare install would silently pull the wrong thing. Every
-install below uses the explicit `git+https://github.com/nikhilcherry/<name>`
-form, pinned to a commit SHA.
+**Policy reminder** (workspace-wide, not just this doc): team Arvyo's six
+tools — `trackr`, `batchr`, `peekr`, `foldr`, `fitr`, `localizr` — are
+**never** installed with a bare `pip install <name>`. None of them are
+published to PyPI, and at least one of those names (`foldr`) is squatted by
+an unrelated package there, so a bare install would silently pull the wrong
+thing. Every install below uses the explicit
+`git+https://github.com/nikhilcherry/<name>` form, pinned to a commit SHA.
 
 ## 0. Prerequisites
 
@@ -83,7 +83,7 @@ If a pin fails to resolve on your platform (e.g. no CPU-only `torch` wheel
 for your OS/arch), install that one package unpinned, note the version you
 actually got, and move on — don't downgrade every other pin to chase it.
 
-## 3. Install the five tools, pinned to a commit SHA
+## 3. Install the six tools, pinned to a commit SHA
 
 **To bump a pin:** `git -C <tool-repo> rev-parse HEAD` on the tool's own
 checkout after pulling, replace the SHA below, re-run this whole cell cold,
@@ -95,6 +95,7 @@ python -m pip install git+https://github.com/nikhilcherry/batchr.git@63cd15b2e77
 python -m pip install git+https://github.com/nikhilcherry/peekr.git@1e7edac7f896bee369d3990877bb8019b1c88bef
 python -m pip install git+https://github.com/nikhilcherry/foldr.git@06000df3ba152224d66b272511f7afca71c8e706
 python -m pip install git+https://github.com/nikhilcherry/fitr.git@ca63fa0a8b5e635202f6d3206c3f3392fc273c25
+python -m pip install git+https://github.com/nikhilcherry/localizr.git@2a99e3941e7586680735ee212aa332f1adfbcdb8
 ```
 
 > **`batchr` pin note (resolved):** at verification time,
@@ -105,8 +106,18 @@ python -m pip install git+https://github.com/nikhilcherry/fitr.git@ca63fa0a8b5e6
 
 `peekr` is not currently imported or shelled out to anywhere in
 `arvyo-pipeline` (it's a standalone data-exploration tool) — it's installed
-here anyway so this cell is the complete, canonical "all five tools" setup
+here anyway so this cell is the complete, canonical "all six tools" setup
 regardless of which ones a given demo path touches.
+
+`localizr` **is** shelled out to by `arvyo/worker.py`, but only when
+centroid vetting is turned on (`pipeline.centroid_vetting_enabled: true` in
+`configs/default.yaml`, or `arvyo.run one --centroid-vet`) — it's off by
+default because it needs live network access to MAST + Gaia for a real
+target pixel file. The core pipeline (steps 4-5 below) runs and passes with
+`localizr` installed but never invoked; it's pinned here so the option is
+available without a second setup pass. Verified installing cleanly with the
+SHA above (`pip install`, `localizr --help`) on 2026-07-23, independent of
+the rest of this doc's original 2026-07-10 run.
 
 ## 4. Install this repo + the arvyo-data sibling health check
 

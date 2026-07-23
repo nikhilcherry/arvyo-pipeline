@@ -22,6 +22,12 @@ class PipelineConfig:
     foldr_timeout_s: float = 300
     fitr_timeout_s: float = 600
     results_dir: str = "results"
+    # Off by default: localizr needs live network access (MAST + Gaia) for
+    # a real target pixel file, which most test/CI/offline environments
+    # don't have. Opt in via configs/default.yaml's `pipeline:` section or
+    # `arvyo.run one --centroid-vet`. See worker.py's _run_centroid_vetting.
+    centroid_vetting_enabled: bool = False
+    localizr_timeout_s: float = 120
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "PipelineConfig":
@@ -36,6 +42,12 @@ class PipelineConfig:
             foldr_timeout_s=float(section.get("foldr_timeout_s", defaults.foldr_timeout_s)),
             fitr_timeout_s=float(section.get("fitr_timeout_s", defaults.fitr_timeout_s)),
             results_dir=str(section.get("results_dir", defaults.results_dir)),
+            centroid_vetting_enabled=bool(
+                section.get("centroid_vetting_enabled", defaults.centroid_vetting_enabled)
+            ),
+            localizr_timeout_s=float(
+                section.get("localizr_timeout_s", defaults.localizr_timeout_s)
+            ),
         )
 
     def as_dict(self) -> dict:
@@ -45,4 +57,6 @@ class PipelineConfig:
             "foldr_timeout_s": self.foldr_timeout_s,
             "fitr_timeout_s": self.fitr_timeout_s,
             "results_dir": self.results_dir,
+            "centroid_vetting_enabled": self.centroid_vetting_enabled,
+            "localizr_timeout_s": self.localizr_timeout_s,
         }

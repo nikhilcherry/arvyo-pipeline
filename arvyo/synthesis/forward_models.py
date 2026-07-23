@@ -113,9 +113,20 @@ def best_explanation(time, flux, flux_err, candidates):
     `candidates`: list of `{"name", "params", "free"}` dicts, where `name`
     is one of SIMULATORS' keys, `params` is the full parameter dict (fixed
     values), and `free` (optional) lists param keys to fit via
-    scipy.optimize.minimize. Returns a list of `{"name", "params", "chi2"}`
-    sorted ascending by chi2 (best fit first).
+    scipy.optimize.minimize. Returns a list of
+    `{"name", "params", "chi2", "n_params", "bic", "aic"}` sorted ascending
+    by BIC (best explanation first).
+
+    Ranking by raw chi2 alone is a mistake whenever candidates have
+    different free-parameter counts (they usually do here: blend's extra
+    free `dilution` and eb's extra free `secondary_scale` let those models
+    always fit at least as well as `planet`, chi2-wise, regardless of which
+    one actually produced the data -- see scripts/regenerate_fixtures.py's
+    docstring, which documents hitting exactly this empirically). BIC
+    (chi2 + n_params * log(n_points)) penalizes that extra freedom, the
+    same fix already used by fitr's model comparison.
     """
+    n_points = len(time)
     ranked = []
     for cand in candidates:
         name = cand["name"]
@@ -130,7 +141,14 @@ def best_explanation(time, flux, flux_err, candidates):
             fitted_params = base_params
             chi2_val = chi2(sim_fn(base_params, time), flux, flux_err)
 
-        ranked.append({"name": name, "params": fitted_params, "chi2": chi2_val})
+        n_params = len(free_keys)
+        bic_val = chi2_val + n_params * np.log(n_points)
+        aic_val = chi2_val + 2 * n_params
 
-    ranked.sort(key=lambda r: r["chi2"])
+        ranked.append({
+            "name": name, "params": fitted_params, "chi2": chi2_val,
+            "n_params": n_params, "bic": bic_val, "aic": aic_val,
+        })
+
+    ranked.sort(key=lambda r: r["bic"])
     return ranked

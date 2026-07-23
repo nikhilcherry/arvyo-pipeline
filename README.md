@@ -118,13 +118,16 @@ period, with the binned global view overlaid.
 ![phase fold](docs/figures/04_phase_fold.png)
 
 **5. Four competing hypotheses** — planet / EB / blend / starspot all fit to
-the same data. `best_explanation` picks `planet`, matching the true label —
-but only just: chi² is 19726.59 for `planet` vs. 19726.71 for `blend`, a
-difference of ~0.12 out of ~19700 (effectively a statistical tie). This is
-the same planet/blend degeneracy documented in `tests/test_end_to_end.py`:
-blend's free `dilution` parameter tracks planet almost exactly at this
-`crowdsap`, and a different noise draw or seed could easily flip the winner.
-`eb` (19747.4) and `starspot` (19848.3) are both clearly worse fits.
+the same data. `best_explanation` picks `planet`, matching the true label.
+Ranking is by BIC (chi², penalized by `n_params * log(n_points)`), not raw
+chi²: blend's free `dilution` parameter tracks planet almost exactly at this
+`crowdsap`, so on chi² alone the two are a near-tie (an earlier version of
+this walkthrough reported chi² 19726.59 for `planet` vs. 19726.71 for
+`blend` — a ~0.12 difference out of ~19700, close enough that a different
+noise draw or seed could flip the raw-chi²-ranked winner). BIC's per-extra-
+parameter penalty (this is the same planet/blend degeneracy documented in
+`tests/test_end_to_end.py`) makes that comparison robust instead of a coin
+flip. `eb` and `starspot` are both clearly worse fits either way.
 
 ![four hypotheses](docs/figures/05_four_hypotheses.png)
 

@@ -183,11 +183,13 @@ def _process_sample(npz_path: Path, *, seed=42, fast=False, need_chain=False):
             candidates = _build_candidates(period, t0, duration_days, depth)
             ranked = best_explanation(time_arr, flux, flux_err, candidates)
             chi2_by_name = {name: None for name in MODEL_NAMES}
+            bic_by_name = {name: None for name in MODEL_NAMES}
             for r in ranked:
                 chi2_by_name[r["name"]] = r["chi2"]
+                bic_by_name[r["name"]] = r["bic"]
             stages["synthesis"] = {
                 "status": "pass",
-                "detail": {"chi2": chi2_by_name, "best": ranked[0]["name"]},
+                "detail": {"chi2": chi2_by_name, "bic": bic_by_name, "best": ranked[0]["name"]},
             }
             artifacts["ranked"] = ranked
         except Exception as exc:
